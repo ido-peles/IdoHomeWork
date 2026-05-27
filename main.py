@@ -26,6 +26,13 @@ def cleanup_old_runs():
                 print(f"Deleting old run folder: {run_folder}")
                 shutil.rmtree(run_folder, ignore_errors=True)
 
+def find_test_dir(repo_dir):
+    """Finds the first directory containing test files to run tests from."""
+    for root, _, files in os.walk(repo_dir):
+        if any(f.startswith("test_") and f.endswith(".py") for f in files):
+            return Path(root)
+    return repo_dir # Fallback to repo root if no specific test dir found
+
 def process_student_repo(student_name, repo_url, run_base_dir):
     """Clones a repo, runs tests with timeout, returns status and output."""
     student_dir = run_base_dir / student_name
@@ -48,17 +55,29 @@ def process_student_repo(student_name, repo_url, run_base_dir):
     repo_dir = student_dir / "repo"
     
     # 2. Run tests (Assuming standard python unittest structure)
-    print(f"Running tests for {student_name}...")
+    print(f"Running tests for {student_name}... in {repo_dir}")
+    test_cwd = find_test_dir(repo_dir)
+    print(f"Running tests in directory: {test_cwd}")
     try:
         result = subprocess.run(
             ["python", "-m", "unittest", "discover"],
-            cwd=repo_dir,
+            cwd=test_cwd,
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS
         )
-        status = "Success" if result.returncode == 0 else "Failed"
+        
         output = result.stdout + "\n" + result.stderr
+        
+        # Stricter check for success. Unittest summary is on stderr.
+        # A successful run must have exit code 0, have "OK" in stderr,
+        # and must NOT report that zero tests were run.
+        status = "Failed" # Default to Failed
+        if result.returncode == 0 and "OK" in result.stderr and "Ran 0 tests" not in result.stderr:
+            status = "Success"
+        elif "Ran 0 tests" in result.stderr:
+            status = "Failed (No tests found)"
+
         return status, output
     except subprocess.TimeoutExpired as e:
         return "Timeout (5m+)", f"Tests exceeded 5 minutes.\n{e.stdout}\n{e.stderr}"
